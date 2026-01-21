@@ -1,9 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Leaf, Store, LogOut, CheckCircle, AlertCircle, Package } from 'lucide-react';
-import { getCurrentUser, clearCurrentUser, getProductByQRCode, saveRetailLog, updateProductStatus, getRetailLogs, getTransportLogByProductId } from '../storage';
+import { Leaf, Store, LogOut, CheckCircle, AlertCircle, Package, Clock } from 'lucide-react';
+import {
+  getCurrentUser,
+  clearCurrentUser,
+  getProductByQRCode,
+  getRetailLogs,
+  getTransportLogByProductId,
+  saveApprovalRequest,
+  getApprovalRequestsByRequesterId
+} from '../storage';
 import { formatCurrency, formatDate } from '../utils';
-import { RetailLog } from '../types';
+import { RetailLog, ApprovalRequest } from '../types';
 
 export default function RetailerDashboard() {
   const navigate = useNavigate();
@@ -13,6 +21,7 @@ export default function RetailerDashboard() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [myRetails, setMyRetails] = useState<RetailLog[]>([]);
+  const [myRequests, setMyRequests] = useState<ApprovalRequest[]>([]);
   const [formData, setFormData] = useState({
     retailPrice: '',
     location: '',
@@ -23,13 +32,16 @@ export default function RetailerDashboard() {
       navigate('/login');
       return;
     }
-    loadMyRetails();
+    loadData();
   }, [user, navigate]);
 
-  const loadMyRetails = () => {
+  const loadData = () => {
     const allRetails = getRetailLogs();
     const filtered = allRetails.filter(r => r.retailerId === user?.id);
     setMyRetails(filtered);
+
+    const requests = getApprovalRequestsByRequesterId(user!.id);
+    setMyRequests(requests);
   };
 
   const handleScanQR = () => {
@@ -60,7 +72,7 @@ export default function RetailerDashboard() {
       return;
     }
 
-    setProduct(foundProduct);
+    setProduct({ ...foundProduct, transportLog });
   };
 
   const handleLogout = () => {
@@ -87,14 +99,28 @@ export default function RetailerDashboard() {
       retailerName: user!.name,
     };
 
-    saveRetailLog(retailLog);
-    updateProductStatus(product.id, 'at_retail');
+    const approvalRequest: ApprovalRequest = {
+      id: crypto.randomUUID(),
+      productId: product.id,
+      productName: product.productName,
+      requesterId: user!.id,
+      requesterName: user!.name,
+      requesterRole: 'retailer',
+      approverId: product.transportLog.transporterId,
+      approverRole: 'transporter',
+      status: 'pending',
+      requestData: retailLog,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
 
-    setSuccess('Retail details updated successfully!');
+    saveApprovalRequest(approvalRequest);
+
+    setSuccess('Approval request sent to transporter successfully!');
     setFormData({ retailPrice: '', location: '' });
     setQrCode('');
     setProduct(null);
-    loadMyRetails();
+    loadData();
 
     setTimeout(() => setSuccess(''), 5000);
   };
@@ -133,7 +159,7 @@ export default function RetailerDashboard() {
               <div className="bg-gradient-to-br from-cyan-500 to-blue-600 p-3 rounded-xl">
                 <Store className="w-6 h-6 text-white" />
               </div>
-              <h2 className="text-2xl font-bold text-gray-900">Update Retail Details</h2>
+              <h2 className="text-2xl font-bold text-gray-900">Request Retail Approval</h2>
             </div>
 
             {error && (
@@ -228,43 +254,82 @@ export default function RetailerDashboard() {
                   disabled={!product}
                   className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 text-white py-3 rounded-xl font-semibold hover:from-cyan-700 hover:to-blue-700 transition-all transform hover:scale-105 shadow-lg hover:shadow-xl flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
                 >
-                  <CheckCircle className="w-5 h-5" />
-                  <span>Update Retail Info</span>
+                  <Clock className="w-5 h-5" />
+                  <span>Request Approval</span>
                 </button>
               </form>
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl shadow-xl p-8 border border-cyan-100">
-            <div className="flex items-center space-x-3 mb-6">
-              <div className="bg-gradient-to-br from-blue-500 to-indigo-600 p-3 rounded-xl">
-                <Package className="w-6 h-6 text-white" />
+          <div className="space-y-8">
+            <div className="bg-white rounded-2xl shadow-xl p-8 border border-cyan-100">
+              <div className="flex items-center space-x-3 mb-6">
+                <div className="bg-gradient-to-br from-blue-500 to-indigo-600 p-3 rounded-xl">
+                  <Clock className="w-6 h-6 text-white" />
+                </div>
+                <h2 className="text-2xl font-bold text-gray-900">My Requests</h2>
               </div>
-              <h2 className="text-2xl font-bold text-gray-900">My Products</h2>
+
+              {myRequests.length === 0 ? (
+                <div className="text-center py-12">
+                  <Clock className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                  <p className="text-gray-500">No requests yet. Submit your first request above!</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {myRequests.map((request) => (
+                    <div key={request.id} className="border-2 border-gray-200 rounded-xl p-4 hover:border-cyan-300 transition-colors">
+                      <h3 className="font-bold text-gray-900 mb-2">{request.productName}</h3>
+                      <div className="space-y-1 text-sm">
+                        <p className="text-gray-600">
+                          <span className="font-semibold">Status:</span>{' '}
+                          <span className={`inline-block px-2 py-1 rounded-lg text-xs font-medium capitalize ${
+                            request.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+                            request.status === 'approved' ? 'bg-green-100 text-green-700' :
+                            'bg-red-100 text-red-700'
+                          }`}>
+                            {request.status}
+                          </span>
+                        </p>
+                        <p className="text-gray-500 text-xs">{formatDate(request.createdAt)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {myRetails.length === 0 ? (
-              <div className="text-center py-12">
-                <Store className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-                <p className="text-gray-500">No products received yet. Scan a QR code to get started!</p>
+            <div className="bg-white rounded-2xl shadow-xl p-8 border border-cyan-100">
+              <div className="flex items-center space-x-3 mb-6">
+                <div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-3 rounded-xl">
+                  <Package className="w-6 h-6 text-white" />
+                </div>
+                <h2 className="text-2xl font-bold text-gray-900">Approved Products</h2>
               </div>
-            ) : (
-              <div className="space-y-4">
-                {myRetails.map((retail) => (
-                  <div key={retail.id} className="border-2 border-gray-200 rounded-xl p-4 hover:border-cyan-300 transition-colors">
-                    <div className="space-y-2 text-sm">
-                      <p className="text-gray-600">
-                        <span className="font-semibold">Location:</span> {retail.location}
-                      </p>
-                      <p className="text-gray-600">
-                        <span className="font-semibold">Retail Price:</span> {formatCurrency(retail.retailPrice)}/kg
-                      </p>
-                      <p className="text-gray-500 text-xs">{formatDate(retail.updatedAt)}</p>
+
+              {myRetails.length === 0 ? (
+                <div className="text-center py-12">
+                  <Store className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                  <p className="text-gray-500">No approved products yet.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {myRetails.map((retail) => (
+                    <div key={retail.id} className="border-2 border-gray-200 rounded-xl p-4 hover:border-cyan-300 transition-colors">
+                      <div className="space-y-2 text-sm">
+                        <p className="text-gray-600">
+                          <span className="font-semibold">Location:</span> {retail.location}
+                        </p>
+                        <p className="text-gray-600">
+                          <span className="font-semibold">Retail Price:</span> {formatCurrency(retail.retailPrice)}/kg
+                        </p>
+                        <p className="text-gray-500 text-xs">{formatDate(retail.updatedAt)}</p>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>

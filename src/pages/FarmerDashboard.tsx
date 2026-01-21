@@ -1,10 +1,20 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Leaf, Plus, Package, LogOut, QrCode, CheckCircle } from 'lucide-react';
+import { Leaf, Plus, Package, LogOut, QrCode, CheckCircle, Clock, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { getCurrentUser, clearCurrentUser, saveProduct, getProducts } from '../storage';
+import {
+  getCurrentUser,
+  clearCurrentUser,
+  saveProduct,
+  getProducts,
+  getApprovalRequestsByApproverId,
+  updateApprovalRequestStatus,
+  getApprovalRequestById,
+  saveTransportLog,
+  updateProductStatus
+} from '../storage';
 import { generateProductId, generateQRCode, formatCurrency, formatDate } from '../utils';
-import { Product } from '../types';
+import { Product, ApprovalRequest, TransportLog } from '../types';
 
 export default function FarmerDashboard() {
   const navigate = useNavigate();
@@ -12,6 +22,8 @@ export default function FarmerDashboard() {
   const [showQR, setShowQR] = useState(false);
   const [generatedQR, setGeneratedQR] = useState('');
   const [myProducts, setMyProducts] = useState<Product[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
+  const [success, setSuccess] = useState('');
   const [formData, setFormData] = useState({
     productName: '',
     quantity: '',
@@ -23,13 +35,16 @@ export default function FarmerDashboard() {
       navigate('/login');
       return;
     }
-    loadMyProducts();
+    loadData();
   }, [user, navigate]);
 
-  const loadMyProducts = () => {
+  const loadData = () => {
     const allProducts = getProducts();
     const filtered = allProducts.filter(p => p.farmerId === user?.id);
     setMyProducts(filtered);
+
+    const approvals = getApprovalRequestsByApproverId(user!.id);
+    setPendingApprovals(approvals);
   };
 
   const handleLogout = () => {
@@ -59,7 +74,28 @@ export default function FarmerDashboard() {
     setGeneratedQR(qrCode);
     setShowQR(true);
     setFormData({ productName: '', quantity: '', price: '' });
-    loadMyProducts();
+    loadData();
+  };
+
+  const handleApproveTransport = (requestId: string) => {
+    const request = getApprovalRequestById(requestId);
+    if (!request) return;
+
+    const transportLog = request.requestData as TransportLog;
+    saveTransportLog(transportLog);
+    updateProductStatus(request.productId, 'in_transport');
+    updateApprovalRequestStatus(requestId, 'approved');
+
+    setSuccess('Transport request approved successfully!');
+    loadData();
+    setTimeout(() => setSuccess(''), 5000);
+  };
+
+  const handleRejectTransport = (requestId: string) => {
+    updateApprovalRequestStatus(requestId, 'rejected');
+    setSuccess('Transport request rejected.');
+    loadData();
+    setTimeout(() => setSuccess(''), 3000);
   };
 
   if (!user) return null;
@@ -90,6 +126,65 @@ export default function FarmerDashboard() {
       </nav>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {pendingApprovals.length > 0 && (
+          <div className="mb-8 bg-white rounded-2xl shadow-xl p-8 border border-orange-200">
+            <div className="flex items-center space-x-3 mb-6">
+              <div className="bg-gradient-to-br from-orange-500 to-red-600 p-3 rounded-xl">
+                <Clock className="w-6 h-6 text-white" />
+              </div>
+              <h2 className="text-2xl font-bold text-gray-900">Pending Transport Approvals</h2>
+            </div>
+
+            {success && (
+              <div className="mb-6 bg-green-50 border-2 border-green-200 rounded-xl p-4 flex items-start space-x-3">
+                <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-green-700">{success}</p>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              {pendingApprovals.map((approval) => {
+                const transportData = approval.requestData as TransportLog;
+                return (
+                  <div key={approval.id} className="border-2 border-orange-200 rounded-xl p-6 bg-gradient-to-br from-orange-50 to-red-50">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h3 className="font-bold text-gray-900 text-lg">{approval.productName}</h3>
+                        <p className="text-sm text-gray-600">Requested by: {approval.requesterName}</p>
+                        <p className="text-xs text-gray-500">{formatDate(approval.createdAt)}</p>
+                      </div>
+                    </div>
+                    <div className="bg-white rounded-lg p-4 mb-4 space-y-2 text-sm">
+                      <p className="text-gray-700">
+                        <span className="font-semibold">Transport Details:</span> {transportData.transportDetails}
+                      </p>
+                      <p className="text-gray-700">
+                        <span className="font-semibold">Transport Cost:</span> {formatCurrency(transportData.transportCost)}
+                      </p>
+                    </div>
+                    <div className="flex space-x-3">
+                      <button
+                        onClick={() => handleApproveTransport(approval.id)}
+                        className="flex-1 bg-gradient-to-r from-green-600 to-emerald-600 text-white py-2 rounded-xl font-semibold hover:from-green-700 hover:to-emerald-700 transition-all flex items-center justify-center space-x-2"
+                      >
+                        <ThumbsUp className="w-4 h-4" />
+                        <span>Approve</span>
+                      </button>
+                      <button
+                        onClick={() => handleRejectTransport(approval.id)}
+                        className="flex-1 bg-gradient-to-r from-red-600 to-rose-600 text-white py-2 rounded-xl font-semibold hover:from-red-700 hover:to-rose-700 transition-all flex items-center justify-center space-x-2"
+                      >
+                        <ThumbsDown className="w-4 h-4" />
+                        <span>Reject</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="grid lg:grid-cols-2 gap-8">
           <div className="bg-white rounded-2xl shadow-xl p-8 border border-emerald-100">
             <div className="flex items-center space-x-3 mb-6">
