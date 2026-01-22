@@ -1,4 +1,4 @@
-import { User, Product, TransportLog, RetailLog } from './types';
+import { User, Product, TransportLog, RetailLog, ApprovalRequest } from './types';
 
 const STORAGE_KEYS = {
   USERS: 'agrichain_users',
@@ -6,6 +6,7 @@ const STORAGE_KEYS = {
   TRANSPORT_LOGS: 'agrichain_transport_logs',
   RETAIL_LOGS: 'agrichain_retail_logs',
   CURRENT_USER: 'agrichain_current_user',
+  APPROVAL_REQUESTS: 'agrichain_approval_requests',
 };
 
 export const saveUser = (user: User): void => {
@@ -97,4 +98,40 @@ export const getRetailLogs = (): RetailLog[] => {
 export const getRetailLogByProductId = (productId: string): RetailLog | undefined => {
   const logs = getRetailLogs();
   return logs.find(l => l.productId === productId);
+};
+
+export const saveApprovalRequest = (request: ApprovalRequest): void => {
+  const requests = getApprovalRequests();
+  requests.push(request);
+  localStorage.setItem(STORAGE_KEYS.APPROVAL_REQUESTS, JSON.stringify(requests));
+};
+
+export const getApprovalRequests = (): ApprovalRequest[] => {
+  const data = localStorage.getItem(STORAGE_KEYS.APPROVAL_REQUESTS);
+  return data ? JSON.parse(data) : [];
+};
+
+export const getApprovalRequestsByApproverId = (approverId: string): ApprovalRequest[] => {
+  const requests = getApprovalRequests();
+  return requests.filter(r => r.approverId === approverId && r.status === 'pending');
+};
+
+export const getApprovalRequestsByRequesterId = (requesterId: string): ApprovalRequest[] => {
+  const requests = getApprovalRequests();
+  return requests.filter(r => r.requesterId === requesterId);
+};
+
+export const updateApprovalRequestStatus = (requestId: string, status: 'approved' | 'rejected'): void => {
+  const requests = getApprovalRequests();
+  const index = requests.findIndex(r => r.id === requestId);
+  if (index !== -1) {
+    requests[index].status = status;
+    requests[index].updatedAt = new Date().toISOString();
+    localStorage.setItem(STORAGE_KEYS.APPROVAL_REQUESTS, JSON.stringify(requests));
+  }
+};
+
+export const getApprovalRequestById = (requestId: string): ApprovalRequest | undefined => {
+  const requests = getApprovalRequests();
+  return requests.find(r => r.id === requestId);
 };

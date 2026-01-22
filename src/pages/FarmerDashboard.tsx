@@ -1,10 +1,20 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Leaf, Plus, Package, LogOut, QrCode, CheckCircle, X } from 'lucide-react';
+import { Leaf, Plus, Package, LogOut, QrCode, CheckCircle, Clock, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { getCurrentUser, clearCurrentUser, saveProduct, getProducts } from '../storage';
-import { generateProductId, formatCurrency, formatDate } from '../utils';
-import { Product } from '../types';
+import {
+  getCurrentUser,
+  clearCurrentUser,
+  saveProduct,
+  getProducts,
+  getApprovalRequestsByApproverId,
+  updateApprovalRequestStatus,
+  getApprovalRequestById,
+  saveTransportLog,
+  updateProductStatus
+} from '../storage';
+import { generateProductId, generateQRCode, formatCurrency, formatDate } from '../utils';
+import { Product, ApprovalRequest, TransportLog } from '../types';
 
 export default function FarmerDashboard() {
   const navigate = useNavigate();
@@ -12,28 +22,29 @@ export default function FarmerDashboard() {
   const [showQR, setShowQR] = useState(false);
   const [generatedQR, setGeneratedQR] = useState('');
   const [myProducts, setMyProducts] = useState<Product[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
+  const [success, setSuccess] = useState('');
   const [formData, setFormData] = useState({
     productName: '',
     quantity: '',
     price: '',
   });
 
-  // Security Check: Redirect if not logged in as a farmer
   useEffect(() => {
     if (!user || user.role !== 'farmer') {
       navigate('/login');
       return;
     }
-    loadMyProducts();
+    loadData();
   }, [user, navigate]);
 
-  const loadMyProducts = () => {
+  const loadData = () => {
     const allProducts = getProducts();
     const filtered = allProducts.filter(p => p.farmerId === user?.id);
-    // Sort by newest first
-    setMyProducts(filtered.sort((a, b) => 
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    ));
+    setMyProducts(filtered);
+
+    const approvals = getApprovalRequestsByApproverId(user!.id);
+    setPendingApprovals(approvals);
   };
 
   const handleLogout = () => {
@@ -45,10 +56,7 @@ export default function FarmerDashboard() {
     e.preventDefault();
 
     const productId = generateProductId();
-    
-    // Updated Logic: QR code now points to the live deployment URL
-    const baseUrl = 'https://agrichaindemo.netlify.app';
-    const qrCodeUrl = `${baseUrl}/?productId=${productId}`;
+    const qrCode = generateQRCode(productId);
 
     const newProduct: Product = {
       id: productId,
@@ -56,25 +64,48 @@ export default function FarmerDashboard() {
       productName: formData.productName,
       quantity: parseFloat(formData.quantity),
       price: parseFloat(formData.price),
-      qrCode: qrCodeUrl,
+      qrCode,
       status: 'created',
       createdAt: new Date().toISOString(),
       farmerName: user!.name,
     };
 
     saveProduct(newProduct);
-    setGeneratedQR(qrCodeUrl);
+    setGeneratedQR(qrCode);
     setShowQR(true);
     setFormData({ productName: '', quantity: '', price: '' });
-    loadMyProducts();
+    loadData();
+  };
+
+  const handleApproveTransport = (requestId: string) => {
+    const request = getApprovalRequestById(requestId);
+    if (!request) return;
+
+    const transportLog = request.requestData as TransportLog;
+    saveTransportLog(transportLog);
+    updateProductStatus(request.productId, 'in_transport');
+    updateApprovalRequestStatus(requestId, 'approved');
+
+    setSuccess('Transport request approved successfully!');
+    loadData();
+    setTimeout(() => setSuccess(''), 5000);
+  };
+
+  const handleRejectTransport = (requestId: string) => {
+    updateApprovalRequestStatus(requestId, 'rejected');
+    setSuccess('Transport request rejected.');
+    loadData();
+    setTimeout(() => setSuccess(''), 3000);
   };
 
   if (!user) return null;
 
+  // Generate scannable QR URL with product ID
+  const scannableQRUrl = `https://agrichaindemo.netlify.app/?product=${generatedQR}`;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-teal-50 to-cyan-50">
-      {/* Navigation */}
-      <nav className="bg-white/80 backdrop-blur-md shadow-sm sticky top-0 z-50 border-b border-emerald-100">
+      <nav className="bg-white/80 backdrop-blur-md shadow-sm sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
@@ -88,185 +119,216 @@ export default function FarmerDashboard() {
             </div>
             <button
               onClick={handleLogout}
-              className="flex items-center space-x-2 px-4 py-2 text-gray-600 hover:text-red-600 transition-colors duration-200"
+              className="flex items-center space-x-2 px-4 py-2 text-gray-700 hover:text-gray-900 transition-colors"
             >
               <LogOut className="w-5 h-5" />
-              <span className="font-medium">Logout</span>
+              <span>Logout</span>
             </button>
           </div>
         </div>
       </nav>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {pendingApprovals.length > 0 && (
+          <div className="mb-8 bg-white rounded-2xl shadow-xl p-8 border border-orange-200">
+            <div className="flex items-center space-x-3 mb-6">
+              <div className="bg-gradient-to-br from-orange-500 to-red-600 p-3 rounded-xl">
+                <Clock className="w-6 h-6 text-white" />
+              </div>
+              <h2 className="text-2xl font-bold text-gray-900">Pending Transport Approvals</h2>
+            </div>
+
+            {success && (
+              <div className="mb-6 bg-green-50 border-2 border-green-200 rounded-xl p-4 flex items-start space-x-3">
+                <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-green-700">{success}</p>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              {pendingApprovals.map((approval) => {
+                const transportData = approval.requestData as TransportLog;
+                return (
+                  <div key={approval.id} className="border-2 border-orange-200 rounded-xl p-6 bg-gradient-to-br from-orange-50 to-red-50">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h3 className="font-bold text-gray-900 text-lg">{approval.productName}</h3>
+                        <p className="text-sm text-gray-600">Requested by: {approval.requesterName}</p>
+                        <p className="text-xs text-gray-500">{formatDate(approval.createdAt)}</p>
+                      </div>
+                    </div>
+                    <div className="bg-white rounded-lg p-4 mb-4 space-y-2 text-sm">
+                      <p className="text-gray-700">
+                        <span className="font-semibold">Transport Details:</span> {transportData.transportDetails}
+                      </p>
+                      <p className="text-gray-700">
+                        <span className="font-semibold">Transport Cost:</span> {formatCurrency(transportData.transportCost)}
+                      </p>
+                    </div>
+                    <div className="flex space-x-3">
+                      <button
+                        onClick={() => handleApproveTransport(approval.id)}
+                        className="flex-1 bg-gradient-to-r from-green-600 to-emerald-600 text-white py-2 rounded-xl font-semibold hover:from-green-700 hover:to-emerald-700 transition-all flex items-center justify-center space-x-2"
+                      >
+                        <ThumbsUp className="w-4 h-4" />
+                        <span>Approve</span>
+                      </button>
+                      <button
+                        onClick={() => handleRejectTransport(approval.id)}
+                        className="flex-1 bg-gradient-to-r from-red-600 to-rose-600 text-white py-2 rounded-xl font-semibold hover:from-red-700 hover:to-rose-700 transition-all flex items-center justify-center space-x-2"
+                      >
+                        <ThumbsDown className="w-4 h-4" />
+                        <span>Reject</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="grid lg:grid-cols-2 gap-8">
-          
-          {/* Create Product Form */}
-          <section className="bg-white rounded-2xl shadow-xl p-8 border border-emerald-100 h-fit">
+          <div className="bg-white rounded-2xl shadow-xl p-8 border border-emerald-100">
             <div className="flex items-center space-x-3 mb-6">
               <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-3 rounded-xl">
                 <Plus className="w-6 h-6 text-white" />
               </div>
-              <h2 className="text-2xl font-bold text-gray-900">Add New Batch</h2>
+              <h2 className="text-2xl font-bold text-gray-900">Create New Product</h2>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-6">
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Product Name</label>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Product Name
+                </label>
                 <input
                   type="text"
                   required
                   value={formData.productName}
                   onChange={(e) => setFormData({ ...formData, productName: e.target.value })}
-                  className="w-full px-4 py-3 rounded-xl border-2 border-gray-100 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 outline-none transition-all"
-                  placeholder="e.g., Organic Basmati Rice"
+                  className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 outline-none transition-all"
+                  placeholder="e.g., Organic Tomatoes"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Quantity (kg)</label>
-                  <input
-                    type="number"
-                    required
-                    step="0.01"
-                    min="0"
-                    value={formData.quantity}
-                    onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
-                    className="w-full px-4 py-3 rounded-xl border-2 border-gray-100 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 outline-none transition-all"
-                    placeholder="0.00"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Price per kg (₹)</label>
-                  <input
-                    type="number"
-                    required
-                    step="0.01"
-                    min="0"
-                    value={formData.price}
-                    onChange={(e) => setFormData({ ...formData, price: e.target.value })}
-                    className="w-full px-4 py-3 rounded-xl border-2 border-gray-100 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 outline-none transition-all"
-                    placeholder="0.00"
-                  />
-                </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Quantity (kg)
+                </label>
+                <input
+                  type="number"
+                  required
+                  step="0.01"
+                  min="0"
+                  value={formData.quantity}
+                  onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 outline-none transition-all"
+                  placeholder="e.g., 100"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Price per kg (₹)
+                </label>
+                <input
+                  type="number"
+                  required
+                  step="0.01"
+                  min="0"
+                  value={formData.price}
+                  onChange={(e) => setFormData({ ...formData, price: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 outline-none transition-all"
+                  placeholder="e.g., 50"
+                />
               </div>
 
               <button
                 type="submit"
-                className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 text-white py-4 rounded-xl font-bold hover:from-emerald-700 hover:to-teal-700 transition-all transform hover:scale-[1.02] shadow-lg flex items-center justify-center space-x-2"
+                className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 text-white py-3 rounded-xl font-semibold hover:from-emerald-700 hover:to-teal-700 transition-all transform hover:scale-105 shadow-lg hover:shadow-xl flex items-center justify-center space-x-2"
               >
                 <Plus className="w-5 h-5" />
-                <span>Generate Product & QR</span>
+                <span>Create Product</span>
               </button>
             </form>
-          </section>
-
-          {/* QR Code Success Display */}
-          <div className="relative">
-            {showQR ? (
-              <div className="bg-white rounded-2xl shadow-xl p-8 border-2 border-emerald-500 animate-in fade-in zoom-in duration-300">
-                <button 
-                  onClick={() => setShowQR(false)}
-                  className="absolute top-4 right-4 p-2 text-gray-400 hover:text-gray-600"
-                >
-                  <X className="w-6 h-6" />
-                </button>
-                
-                <div className="flex items-center space-x-3 mb-6">
-                  <div className="bg-emerald-100 p-2 rounded-full">
-                    <CheckCircle className="w-6 h-6 text-emerald-600" />
-                  </div>
-                  <h2 className="text-2xl font-bold text-gray-900">QR Code Ready</h2>
-                </div>
-
-                <div className="text-center">
-                  <p className="text-gray-600 mb-6">
-                    Scan this code to track the supply chain journey of this product.
-                  </p>
-                  <div className="bg-white p-6 rounded-2xl inline-block shadow-inner border border-emerald-100">
-                    <QRCodeSVG 
-                      value={generatedQR} 
-                      size={220} 
-                      level="H"
-                      includeMargin={true}
-                    />
-                  </div>
-                  <div className="mt-6 bg-emerald-50 rounded-xl p-4 border border-emerald-200">
-                    <p className="text-xs font-bold text-emerald-800 uppercase tracking-wider mb-1">Direct Link</p>
-                    <p className="text-sm font-mono text-emerald-700 break-all select-all">{generatedQR}</p>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-emerald-800/5 rounded-2xl border-2 border-dashed border-emerald-200 h-full flex flex-col items-center justify-center p-8 text-center">
-                <QrCode className="w-16 h-16 text-emerald-200 mb-4" />
-                <p className="text-emerald-800 font-medium">Create a product to generate a trackable QR code</p>
-              </div>
-            )}
           </div>
+
+          {showQR && (
+            <div className="bg-white rounded-2xl shadow-xl p-8 border border-emerald-100">
+              <div className="flex items-center space-x-3 mb-6">
+                <div className="bg-gradient-to-br from-teal-500 to-cyan-600 p-3 rounded-xl">
+                  <CheckCircle className="w-6 h-6 text-white" />
+                </div>
+                <h2 className="text-2xl font-bold text-gray-900">Product Created!</h2>
+              </div>
+
+              <div className="text-center">
+                <p className="text-gray-600 mb-6">
+                  Share this QR code with transporters and retailers. Scanning redirects to product page.
+                </p>
+                <div className="bg-white p-8 rounded-xl inline-block shadow-lg border-2 border-emerald-200 mx-auto mb-6">
+                  <QRCodeSVG 
+                    value={scannableQRUrl} 
+                    size={256} 
+                    level="H" 
+                    includeMargin={true}
+                  />
+                </div>
+                <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-xl p-4 border-2 border-emerald-200">
+                  <p className="text-sm font-semibold text-gray-700 mb-1">Product ID</p>
+                  <p className="text-lg font-mono text-emerald-700 break-all">{generatedQR}</p>
+                </div>
+                <button
+                  onClick={() => setShowQR(false)}
+                  className="mt-6 px-6 py-2 bg-gray-100 text-gray-700 rounded-xl font-medium hover:bg-gray-200 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Product List */}
-        <section className="mt-12">
+        <div className="mt-8 bg-white rounded-2xl shadow-xl p-8 border border-emerald-100">
           <div className="flex items-center space-x-3 mb-6">
-            <div className="bg-gradient-to-br from-cyan-500 to-blue-600 p-3 rounded-xl shadow-lg">
+            <div className="bg-gradient-to-br from-cyan-500 to-blue-600 p-3 rounded-xl">
               <Package className="w-6 h-6 text-white" />
             </div>
-            <h2 className="text-2xl font-bold text-gray-900">Inventory Management</h2>
+            <h2 className="text-2xl font-bold text-gray-900">My Products</h2>
           </div>
 
           {myProducts.length === 0 ? (
-            <div className="bg-white rounded-2xl shadow-md py-20 text-center border border-gray-100">
-              <Package className="w-16 h-16 text-gray-200 mx-auto mb-4" />
-              <p className="text-gray-500 text-lg">Your inventory is currently empty.</p>
+            <div className="text-center py-12">
+              <QrCode className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+              <p className="text-gray-500">No products created yet. Create your first product above!</p>
             </div>
           ) : (
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
               {myProducts.map((product) => (
-                <div 
-                  key={product.id} 
-                  className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 hover:border-emerald-300 hover:shadow-md transition-all group"
-                >
-                  <div className="flex justify-between items-start mb-4">
-                    <h3 className="font-bold text-xl text-gray-900 group-hover:text-emerald-700 transition-colors">
-                      {product.productName}
-                    </h3>
-                    <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${
-                      product.status === 'created' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'
-                    }`}>
-                      {product.status}
-                    </span>
-                  </div>
-                  
-                  <div className="space-y-3">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-500 font-medium">Quantity</span>
-                      <span className="text-gray-900 font-bold">{product.quantity} kg</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-500 font-medium">Price</span>
-                      <span className="text-gray-900 font-bold">{formatCurrency(product.price)} / kg</span>
-                    </div>
-                    <div className="pt-3 border-t border-gray-50 flex items-center justify-between">
-                      <p className="text-gray-400 text-xs">{formatDate(product.createdAt)}</p>
-                      <button 
-                        onClick={() => {
-                          setGeneratedQR(product.qrCode);
-                          setShowQR(true);
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }}
-                        className="text-emerald-600 hover:text-emerald-700 text-xs font-bold uppercase tracking-wider"
-                      >
-                        View QR
-                      </button>
-                    </div>
+                <div key={product.id} className="border-2 border-gray-200 rounded-xl p-4 hover:border-emerald-300 transition-colors">
+                  <h3 className="font-bold text-gray-900 mb-2">{product.productName}</h3>
+                  <div className="space-y-1 text-sm">
+                    <p className="text-gray-600">
+                      <span className="font-semibold">Quantity:</span> {product.quantity} kg
+                    </p>
+                    <p className="text-gray-600">
+                      <span className="font-semibold">Price:</span> {formatCurrency(product.price)}/kg
+                    </p>
+                    <p className="text-gray-600">
+                      <span className="font-semibold">Status:</span>{' '}
+                      <span className="inline-block px-2 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-xs font-medium capitalize">
+                        {product.status.replace('_', ' ')}
+                      </span>
+                    </p>
+                    <p className="text-gray-500 text-xs">{formatDate(product.createdAt)}</p>
                   </div>
                 </div>
               ))}
             </div>
           )}
-        </section>
-      </main>
+        </div>
+      </div>
     </div>
   );
 }

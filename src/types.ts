@@ -45,3 +45,18 @@ export interface ProductJourney {
   transportLog?: TransportLog;
   retailLog?: RetailLog;
 }
+
+export interface ApprovalRequest {
+  id: string;
+  productId: string;
+  productName: string;
+  requesterId: string;
+  requesterName: string;
+  requesterRole: 'transporter' | 'retailer';
+  approverId: string;
+  approverRole: 'farmer' | 'transporter';
+  status: 'pending' | 'approved' | 'rejected';
+  requestData: TransportLog | RetailLog;
+  createdAt: string;
+  updatedAt: string;
+}
